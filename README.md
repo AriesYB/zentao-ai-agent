@@ -51,37 +51,13 @@ LLM_MODEL=deepseek-r1
 ### 1. 任务规划智能体
 
 ```
-运行 task_plan_agent.py
+运行 first_plan_task.py
 ```
 
-### 2. 禅道工具使用
+### 2. 批量创建禅道任务
 
-```python
-from zentao_ai_agent.zentao import ZendaoTool
-
-# 创建禅道工具实例
-zendao = ZendaoTool()
-
-# 登录
-zendao.login()
-
-# 获取进行中的项目
-projects = zendao.get_doing_projects()
-
-# 批量创建任务
-task_data = """
-张三	103615	【#103615-PageIndex解析文件-研究】研究测试PageIndex官网版api	研究	4	2025/11/24	2025/11/24
-张三	103615	【#103615-PageIndex解析文件-编码】编写调用代码解析采购需求文件	后端编码	4	2025/11/24	2025/11/24
-"""
-
-username_mapping = {"张三": "zhangsan"}
-
-# 验证数据
-result = zendao.batch_create_tasks_from_text(task_data, username_mapping, execute_create=False)
-
-if result['validation_passed']:
-    # 确认后创建任务
-    result = zendao.batch_create_tasks_from_text(task_data, username_mapping, execute_create=True)
+```
+运行 then_create_task.py
 ```
 
 ## 项目结构
@@ -107,8 +83,8 @@ zentao-ai-agent/
 │       ├── config.py       # 配置加载
 │       └── date_utils.py   # 日期工具
 ├── examples/               # 示例代码
-│   ├── basic_usage.py
-│   └── batch_create.py
+│   ├── first_plan_task.py
+│   └── then_create_task.py
 ├── tests/                  # 测试文件
 │   └── test_zentao.py
 ├── .env.example            # 环境变量示例
@@ -144,24 +120,6 @@ zentao-ai-agent/
 - 运营相关：培训、请假、其他
 
 完整列表请参考 `zentao_ai_agent/zentao/task_types.py`
-
-## 开发
-
-### 运行测试
-
-```bash
-pytest tests/
-```
-
-### 代码格式化
-
-```bash
-black zentao_ai_agent/
-```
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
 
 ## 许可证
 
