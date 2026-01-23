@@ -1,0 +1,67 @@
+[project]
+name = "zentao-ai-agent"
+version = "0.1.0"
+description = "基于大语言模型的禅道任务规划与录入智能体"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = [
+    "zentao",
+    "ai",
+    "agent",
+    "task-planning",
+    "llm",
+    "langchain"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "langchain>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langchain-core>=0.3.0",
+    "httpx>=0.27.0",
+    "requests>=2.31.0",
+    "chinese-calendar>=1.9.0",
+    "python-dotenv>=1.0.0",
+    "llm-stream-parser>=0.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AriesYB/zentao-ai-agent"
+Repository = "https://github.com/AriesYB/zentao-ai-agent"
+Issues = "https://github.com/AriesYB/zentao-ai-agent/issues"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["zentao_ai_agent"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310', 'py311', 'py312']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
