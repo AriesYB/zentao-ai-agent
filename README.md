@@ -112,6 +112,8 @@ zentao-ai-agent/
 
 ![img_1.png](img_1.png)
 
+![img_2.png](img_2.png)
+
 ## 支持的任务类型
 
 项目支持以下任务类型：
