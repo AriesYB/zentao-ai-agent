@@ -8,6 +8,7 @@ import uuid
 import re
 from typing import Dict, Any, Optional, List
 import requests
+from bs4 import BeautifulSoup
 
 from ..utils.config import config
 from .task_types import task_type_dict
@@ -810,3 +811,60 @@ class ZendaoTool:
             'tasks_to_create': tasks_to_create,
             'create_results': create_results
         }
+
+    def close_task(self, task_id: int, comment: str = "") -> bool:
+        """
+        关闭禅道任务
+
+        Args:
+            task_id: 任务ID
+            comment: 关闭备注（可选）
+
+        Returns:
+            bool: 是否成功关闭
+
+        Raises:
+            ValueError: 当无法提取uid参数时抛出
+        """
+        self._ensure_logged_in()
+
+        # 步骤1：获取关闭任务表单页面
+        url = f"{self.base_url}task-close-{task_id}.html?onlybody=yes"
+        response = self.session.get(url)
+
+        if response.status_code != 200:
+            raise RuntimeError(f'获取关闭任务页面失败，状态码: {response.status_code}')
+
+        # 步骤2：从响应中提取uid
+        # 方法A：使用正则表达式
+        uid_match = re.search(r"var kuid = '([a-f0-9]+)';", response.text)
+        if not uid_match:
+            # 方法B：使用BeautifulSoup查找隐藏字段
+            soup = BeautifulSoup(response.text, 'html.parser')
+            uid_input = soup.find('input', {'id': 'uid', 'name': 'uid'})
+            if uid_input:
+                uid = uid_input.get('value')
+            else:
+                raise ValueError(f"无法提取uid参数，任务ID: {task_id}")
+        else:
+            uid = uid_match.group(1)
+
+        # 步骤3：提交关闭任务请求
+        post_data = {
+            'comment': comment,
+            'uid': uid
+        }
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': url,
+            'Origin': self.base_url.rstrip('/'),
+            'Connection': 'keep-alive'
+        }
+
+        response = self.session.post(url, headers=headers, data=post_data)
+
+        return response.status_code == 200
