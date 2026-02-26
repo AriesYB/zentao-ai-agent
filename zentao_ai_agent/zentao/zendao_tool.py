@@ -868,3 +868,91 @@ class ZendaoTool:
         response = self.session.post(url, headers=headers, data=post_data)
 
         return response.status_code == 200
+
+    def get_task_types(self, project_id: int = None, story_id: int = None, module_id: int = None) -> Dict[str, str]:
+        """
+        动态获取禅道任务类型列表
+        
+        通过访问创建任务页面，解析HTML中的任务类型下拉选项，获取最新的任务类型映射。
+        
+        Args:
+            project_id: 项目ID（可选，用于构建完整的创建任务页面URL）
+            story_id: 需求ID（可选）
+            module_id: 模块ID（可选）
+            
+        Returns:
+            Dict[str, str]: 任务类型字典，键为中文名称，值为英文类型值
+                          例如: {"前端编码": "frontendCoding", "后端编码": "backendCoding"}
+        
+        Raises:
+            ValueError: 当未登录或无法解析任务类型时抛出
+        """
+        self._ensure_logged_in()
+        
+        # 构建创建任务页面URL
+        # 如果提供了完整参数，使用完整URL；否则使用一个简化的URL
+        if project_id and story_id and module_id:
+            url = f"{self.base_url}task-create-{project_id}-{story_id}-{module_id}.html"
+        else:
+            # 尝试获取一个进行中的项目来构建URL
+            projects = self.get_doing_projects()
+            if not projects:
+                raise ValueError("无法获取进行中的项目，请提供 project_id, story_id 和 module_id 参数")
+            
+            project = projects[0]
+            project_id = project.get('id')
+            if not project_id:
+                raise ValueError("无法从项目中获取ID")
+            
+            # 使用简化的URL（禅道支持这种格式）
+            url = f"{self.base_url}task-create-{project_id}-0-0.html"
+        
+        # 设置请求头
+        headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Cache-Control': 'max-age=0',
+            'Connection': 'keep-alive',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+            'Referer': f"{self.base_url}my-task.html",
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        try:
+            response = self.session.get(url, headers=headers)
+            
+            if response.status_code != 200:
+                raise RuntimeError(f'获取创建任务页面失败，状态码: {response.status_code}')
+            
+            # 使用BeautifulSoup解析HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 查找任务类型的select元素
+            type_select = soup.find('select', {'name': 'type'})
+            
+            if not type_select:
+                raise ValueError('无法在页面中找到任务类型选择元素')
+            
+            # 解析所有option元素
+            task_types = {}
+            options = type_select.find_all('option')
+            
+            for option in options:
+                value = option.get('value')
+                text = option.get_text(strip=True)
+                
+                # 跳过空值选项
+                if value and text:
+                    task_types[text] = value
+            
+            if not task_types:
+                raise ValueError('未能解析到任何任务类型')
+            
+            return task_types
+            
+        except Exception as e:
+            raise ValueError(f'解析任务类型失败: {e}')

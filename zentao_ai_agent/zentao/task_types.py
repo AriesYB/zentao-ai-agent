@@ -1,9 +1,14 @@
 """
 任务类型定义模块
 定义禅道任务类型枚举和映射字典
+支持动态从禅道系统获取最新的任务类型列表
 """
 
 from enum import Enum
+from typing import Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .zendao_tool import ZendaoTool
 
 
 class TaskType(Enum):
@@ -150,3 +155,60 @@ task_type_dict = {
     "通用运营": "commonOperation",
     "客服": "customService"
 }
+
+
+def get_dynamic_task_types(zendao_tool: 'ZendaoTool', project_id: Optional[int] = None,
+                          story_id: Optional[int] = None, module_id: Optional[int] = None) -> Dict[str, str]:
+    """
+    动态从禅道系统获取最新的任务类型映射
+    
+    Args:
+        zendao_tool: ZendaoTool 实例
+        project_id: 项目ID（可选）
+        story_id: 需求ID（可选）
+        module_id: 模块ID（可选）
+        
+    Returns:
+        Dict[str, str]: 任务类型字典，键为中文名称，值为英文类型值
+        
+    Example:
+        >>> from zentao_ai_agent.zentao import ZendaoTool
+        >>> tool = ZendaoTool()
+        >>> tool.login()
+        >>> task_types = get_dynamic_task_types(tool)
+        >>> print(task_types)
+        {'前端编码': 'frontendCoding', '后端编码': 'backendCoding', ...}
+    """
+    return zendao_tool.get_task_types(project_id=project_id, story_id=story_id, module_id=module_id)
+
+
+def update_task_type_dict(zendao_tool: 'ZendaoTool', project_id: Optional[int] = None,
+                         story_id: Optional[int] = None, module_id: Optional[int] = None) -> Dict[str, str]:
+    """
+    从禅道系统获取最新的任务类型并更新全局 task_type_dict
+    
+    注意：此函数会先清空旧的 task_type_dict，然后用最新的任务类型替换
+    
+    Args:
+        zendao_tool: ZendaoTool 实例
+        project_id: 项目ID（可选）
+        story_id: 需求ID（可选）
+        module_id: 模块ID（可选）
+        
+    Returns:
+        Dict[str, str]: 更新后的任务类型字典
+        
+    Example:
+        >>> from zentao_ai_agent.zentao import ZendaoTool
+        >>> from zentao_ai_agent.zentao.task_types import update_task_type_dict, task_type_dict
+        >>> tool = ZendaoTool()
+        >>> tool.login()
+        >>> update_task_type_dict(tool)
+        >>> print(task_type_dict)  # 已更新为最新的任务类型
+    """
+    global task_type_dict
+    new_types = zendao_tool.get_task_types(project_id=project_id, story_id=story_id, module_id=module_id)
+    # 清空旧的任务类型，然后用新的替换
+    task_type_dict.clear()
+    task_type_dict.update(new_types)
+    return task_type_dict

@@ -268,7 +268,7 @@ class ZentaoTaskPlanAgent:
 - 需求任务为 #需求（来源：业务需求，大部分任务）
 - bug任务为 @BUG类（来源：生产事件/BUG，改bug）
 - 事项任务为 *事项（来源：非业务需求，请假、出差等）
-3. 每个任务不超过8小时，如果超过了就让用户协助拆分任务，每个任务最少2小时，确保写满工作日5天40小时的工时，除非遇到节假日调休；当天完成的结束日期写当天
+3. 每个任务不超过8小时，如果超过了就让用户协助拆分任务，每个任务最少2小时，确保写满工作日的工时（一般是5天40小时，具体得看工作日情况），除非遇到节假日调休；当天完成的结束日期写当天
 4. 任务数量不足时让用户补充；任务数量太多时提示用户去除部分任务，工作量需要适当评估，不要排得太紧急忙不过来，而且可能存在对接联调、沟通协调等事情
 5. 任务类型暂时使用简短描述（如：研究、后端开发、前端编码、测试、会议及培训等），后续会自动转换为标准类型
 6. 任务尽量拆分为8个及以上
@@ -354,13 +354,20 @@ class ZentaoTaskPlanAgent:
     def update_task_type_node(self, state: AgentState) -> AgentState:
         """
         更新任务类型节点：将任务规划中的简短任务类型转换为标准任务类型
+        动态从禅道系统获取最新的任务类型列表
         """
         task_plan = state.get("task_plan", "")
         if not task_plan:
             return state
 
-        # 构建任务类型映射提示词
-        task_type_mapping = "\n".join([f"{k}: {v}" for k, v in zendao_tool.task_type_dict.items()])
+        # 动态获取任务类型映射
+        try:
+            dynamic_task_types = zendao_tool.get_task_types()
+            task_type_mapping = "\n".join([f"{k}: {v}" for k, v in dynamic_task_types.items()])
+        except Exception as e:
+            # 如果动态获取失败，使用静态的任务类型字典作为后备
+            print(f"动态获取任务类型失败，使用静态字典: {e}")
+            task_type_mapping = "\n".join([f"{k}: {v}" for k, v in zendao_tool.task_type_dict.items()])
 
         sys_prompt = ChatPromptTemplate.from_messages([
             SystemMessagePromptTemplate.from_template(
