@@ -411,6 +411,8 @@ class ZentaoTaskPlanAgent:
 
 
 if __name__ == "__main__":
+    print(get_next_workdays("current"))
+
     # 初始化智能体
     guide_agent = ZentaoTaskPlanAgent()
 
