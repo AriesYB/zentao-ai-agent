@@ -33,5 +33,235 @@ def test_strip_html_tags():
     assert "这是一段HTML文本" in text
 
 
+def test_extract_form_data():
+    html = """
+    <form>
+        <input type="hidden" name="uid" value="abc123">
+        <input type="text" name="consumed" value="1">
+        <textarea name="comment">默认备注</textarea>
+        <select name="left">
+            <option value="2">2</option>
+            <option value="0" selected>0</option>
+        </select>
+    </form>
+    """
+
+    data = ZendaoTool._extract_form_data(html)
+    assert data["uid"] == "abc123"
+    assert data["consumed"] == "1"
+    assert data["comment"] == "默认备注"
+    assert data["left"] == "0"
+
+
+def test_extract_form_field_names():
+    html = """
+    <form>
+        <input type="hidden" name="uid" value="abc123">
+        <input type="text" name="hoursConsumed" value="">
+        <textarea name="comment"></textarea>
+    </form>
+    """
+
+    field_names = ZendaoTool._extract_form_field_names(html)
+    assert field_names == ["uid", "hoursConsumed", "comment"]
+
+
+def test_build_finish_consumed_updates_uses_dynamic_consumed_keys():
+    form_data = {
+        "uid": "abc123",
+        "hoursConsumed": "",
+        "workConsumed": "",
+    }
+
+    updates = ZendaoTool._build_finish_consumed_updates(form_data, 4)
+    assert updates["hoursConsumed"] == "4"
+    assert updates["workConsumed"] == "4"
+
+
+def test_filter_tasks_by_date_range():
+    tasks = [
+        {
+            "id": 1,
+            "name": "任务1",
+            "status": "wait",
+            "estStarted": "2026-04-08",
+            "deadline": "2026-04-10",
+            "closedDate": "0000-00-00 00:00:00",
+        },
+        {
+            "id": 2,
+            "name": "任务2",
+            "status": "done",
+            "estStarted": "2026-04-09",
+            "deadline": "2026-04-09",
+            "closedDate": "0000-00-00 00:00:00",
+        },
+        {
+            "id": 3,
+            "name": "任务3",
+            "status": "doing",
+            "estStarted": "2026-04-15",
+            "deadline": "2026-04-16",
+            "closedDate": "0000-00-00 00:00:00",
+        },
+    ]
+
+    matched = ZendaoTool.filter_tasks_by_date(
+        tasks,
+        start_date="2026-04-07",
+        end_date="2026-04-13",
+        date_field="range",
+        statuses=("wait", "doing"),
+    )
+
+    assert [task["id"] for task in matched] == [1]
+
+
+def test_calculate_finish_consumed_uses_estimate_gap():
+    task = {"estimate": "8", "consumed": "3.5"}
+    assert ZendaoTool.calculate_finish_consumed(task) == 4.5
+
+
+def test_auto_finish_tasks_by_date_dry_run():
+    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    zendao.get_my_tasks = lambda: {
+        "tasks": [
+            {
+                "id": 101,
+                "name": "今天的任务",
+                "status": "doing",
+                "estimate": "8",
+                "consumed": "2",
+                "estStarted": "2026-04-13",
+                "deadline": "2026-04-13",
+                "closedDate": "0000-00-00 00:00:00",
+            },
+            {
+                "id": 102,
+                "name": "没有预估工时",
+                "status": "doing",
+                "estimate": "0",
+                "consumed": "0",
+                "estStarted": "2026-04-13",
+                "deadline": "2026-04-13",
+                "closedDate": "0000-00-00 00:00:00",
+            },
+        ]
+    }
+
+    result = zendao.auto_finish_tasks_by_date(
+        start_date="2026-04-13",
+        dry_run=True
+    )
+
+    assert result["matched_count"] == 2
+    assert result["success_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["results"][0]["status"] == "planned"
+    assert result["results"][0]["finish_consumed"] == 6.0
+    assert result["results"][1]["status"] == "skipped"
+
+
+def test_finish_task_omits_consumed_when_none():
+    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    captured = {}
+
+    def fake_get(url):
+        return FakeResponse(text="<input id='uid' name='uid' value='uid-123'>")
+
+    def fake_post(url, headers=None, data=None):
+        captured["data"] = data
+        return FakeResponse(status_code=200)
+
+    zendao.session.get = fake_get
+    zendao.session.post = fake_post
+    details = iter([
+        {"id": 101, "status": "doing", "consumed": "4", "left": "1"},
+        {"id": 101, "status": "done", "consumed": "4", "left": "0"},
+    ])
+    zendao.get_task_detail = lambda task_id: next(details)
+
+    assert zendao.finish_task(task_id=101, consumed=None, left=0, comment="完成") is True
+    assert "consumed" not in captured["data"]
+    assert captured["data"]["left"] == "0"
+    assert captured["data"]["comment"] == "完成"
+
+
+def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
+    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    zendao.get_my_tasks = lambda: {
+        "tasks": [
+            {
+                "id": 201,
+                "name": "工时已补齐的任务",
+                "status": "doing",
+                "estimate": "8",
+                "consumed": "8",
+                "estStarted": "2026-04-13",
+                "deadline": "2026-04-13",
+                "closedDate": "0000-00-00 00:00:00",
+            },
+        ]
+    }
+
+    captured = {}
+
+    def fake_finish_task(task_id, consumed=None, left=0, comment=""):
+        captured["task_id"] = task_id
+        captured["consumed"] = consumed
+        captured["left"] = left
+        captured["comment"] = comment
+        return True
+
+    zendao.finish_task = fake_finish_task
+
+    result = zendao.auto_finish_tasks_by_date(
+        start_date="2026-04-13",
+        dry_run=False
+    )
+
+    assert result["success_count"] == 1
+    assert result["results"][0]["finish_consumed"] == 0.0
+    assert captured["task_id"] == 201
+    assert captured["consumed"] is None
+    assert captured["left"] == 0
+
+
+def test_finish_task_raises_error_when_post_200_but_task_not_updated():
+    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    zendao.session.get = lambda url: FakeResponse(text="<input id='uid' name='uid' value='uid-123'>")
+    zendao.session.post = lambda url, headers=None, data=None: FakeResponse(status_code=200, text="validation error")
+    details = iter([
+        {"id": 301, "status": "doing", "consumed": "0", "left": "4"},
+        {"id": 301, "status": "doing", "consumed": "0", "left": "4"},
+    ])
+    zendao.get_task_detail = lambda task_id: next(details)
+
+    with pytest.raises(RuntimeError, match="validation error"):
+        zendao.finish_task(task_id=301, consumed=4, left=0, comment="完成")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

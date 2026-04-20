@@ -6,7 +6,8 @@
 import json
 import uuid
 import re
-from typing import Dict, Any, Optional, List
+from datetime import date, datetime
+from typing import Dict, Any, Optional, List, Iterable
 import requests
 from bs4 import BeautifulSoup
 
@@ -303,6 +304,233 @@ class ZendaoTool:
 
         response = self.session.post(url)
         return self._parse_response_data(response)
+
+    @staticmethod
+    def _normalize_task_list(tasks: Any) -> List[Dict[str, Any]]:
+        """
+        将禅道返回的任务列表标准化为列表结构
+        """
+        if isinstance(tasks, list):
+            return tasks
+        if isinstance(tasks, dict):
+            return list(tasks.values())
+        return []
+
+    @staticmethod
+    def _parse_date_value(value: Any) -> Optional[date]:
+        """
+        解析禅道日期字段
+        """
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text or text.startswith("0000-00-00"):
+            return None
+
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _parse_float_value(value: Any, default: float = 0.0) -> float:
+        """
+        解析工时字段
+        """
+        if value is None:
+            return default
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def filter_tasks_by_date(cls, tasks: Any, start_date: str, end_date: Optional[str] = None,
+                             date_field: str = "range", statuses: Optional[Iterable[str]] = None,
+                             exclude_closed: bool = True) -> List[Dict[str, Any]]:
+        """
+        按日期范围筛选任务
+
+        Args:
+            tasks: 禅道任务列表，支持 list 或 dict
+            start_date: 开始日期，格式 YYYY-MM-DD / YYYY/MM/DD
+            end_date: 结束日期，默认等于 start_date
+            date_field: 筛选字段，可选 estStarted / deadline / range
+            statuses: 限定状态列表，默认不过滤
+            exclude_closed: 是否排除已关闭任务
+        """
+        start = cls._parse_date_value(start_date)
+        end = cls._parse_date_value(end_date or start_date)
+        if not start or not end:
+            raise ValueError("start_date 和 end_date 必须是有效日期")
+        if start > end:
+            start, end = end, start
+
+        allowed_statuses = set(statuses) if statuses else None
+        matched_tasks = []
+
+        for task in cls._normalize_task_list(tasks):
+            status = task.get("status")
+            if allowed_statuses and status not in allowed_statuses:
+                continue
+
+            if exclude_closed and cls._parse_date_value(task.get("closedDate")) is not None:
+                continue
+
+            est_started = cls._parse_date_value(task.get("estStarted"))
+            deadline = cls._parse_date_value(task.get("deadline"))
+
+            if date_field == "estStarted":
+                matched = est_started is not None and start <= est_started <= end
+            elif date_field == "deadline":
+                matched = deadline is not None and start <= deadline <= end
+            elif date_field == "range":
+                if est_started is None and deadline is None:
+                    matched = False
+                else:
+                    task_start = est_started or deadline
+                    task_end = deadline or est_started
+                    matched = task_start <= end and task_end >= start
+            else:
+                raise ValueError("date_field 仅支持 estStarted、deadline、range")
+
+            if matched:
+                matched_tasks.append(task)
+
+        return matched_tasks
+
+    @classmethod
+    def calculate_finish_consumed(cls, task: Dict[str, Any]) -> float:
+        """
+        计算完成任务时需要补录的工时
+
+        规则：将累计消耗补齐到预估工时；若已经超过预估工时，则不再补录。
+        """
+        estimate = cls._parse_float_value(task.get("estimate"))
+        consumed = cls._parse_float_value(task.get("consumed"))
+        return max(0.0, estimate - consumed)
+
+    @staticmethod
+    def _format_hour_value(value: float) -> str:
+        """
+        将工时格式化为禅道表单需要的字符串
+        """
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _is_finished_task_detail(task_detail: Dict[str, Any]) -> bool:
+        """
+        根据任务详情判断任务是否已进入完成态
+        """
+        status = str(task_detail.get("status", "")).strip().lower()
+        if status in {"done", "closed"}:
+            return True
+
+        finished_by = str(task_detail.get("finishedBy", "")).strip()
+        finished_date = str(task_detail.get("finishedDate", "")).strip()
+        return bool(finished_by) and finished_by != "0" and not finished_date.startswith("0000-00-00")
+
+    @staticmethod
+    def _extract_submit_error(response_text: str) -> str:
+        """
+        从禅道表单提交响应中尽量提取错误信息
+        """
+        if not response_text:
+            return "提交后任务状态和工时都没有变化"
+
+        patterns = [
+            r"alert\(['\"](.+?)['\"]\)",
+            r'"message"\s*:\s*"(.+?)"',
+            r'"reason"\s*:\s*"(.+?)"',
+            r"<div[^>]*class=['\"][^'\"]*alert[^'\"]*['\"][^>]*>(.*?)</div>",
+            r"<td[^>]*class=['\"][^'\"]*message[^'\"]*['\"][^>]*>(.*?)</td>",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, response_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                message = strip_html_tags(match.group(1)).strip()
+                if message:
+                    return message
+
+        plain_text = strip_html_tags(response_text).strip()
+        if plain_text:
+            return plain_text[:200]
+        return "提交后任务状态和工时都没有变化"
+
+    @staticmethod
+    def _extract_form_data(response_text: str) -> Dict[str, str]:
+        """
+        从HTML表单中提取默认字段值
+        """
+        soup = BeautifulSoup(response_text, 'html.parser')
+        form = soup.find('form')
+        if not form:
+            return {}
+
+        form_data: Dict[str, str] = {}
+
+        for field in form.find_all(['input', 'textarea', 'select']):
+            name = field.get('name')
+            if not name:
+                continue
+
+            tag_name = field.name.lower()
+            field_type = str(field.get('type', '')).lower()
+
+            if tag_name == 'input':
+                if field_type in {'checkbox', 'radio'} and not field.has_attr('checked'):
+                    continue
+                form_data[name] = field.get('value', '')
+            elif tag_name == 'textarea':
+                form_data[name] = field.get_text()
+            elif tag_name == 'select':
+                selected_option = field.find('option', selected=True)
+                if selected_option is None:
+                    selected_option = field.find('option')
+                form_data[name] = selected_option.get('value', '') if selected_option else ''
+
+        return form_data
+
+    @staticmethod
+    def _extract_form_field_names(response_text: str) -> List[str]:
+        """
+        提取页面表单中的字段名，便于排查动态字段
+        """
+        soup = BeautifulSoup(response_text, 'html.parser')
+        field_names: List[str] = []
+        for field in soup.find_all(['input', 'textarea', 'select']):
+            name = field.get('name')
+            if name:
+                field_names.append(name)
+        return field_names
+
+    @classmethod
+    def _build_finish_consumed_updates(cls, form_data: Dict[str, str], consumed: Optional[float]) -> Dict[str, str]:
+        """
+        根据完成任务页面的实际字段名，生成“本次消耗”更新字段
+        """
+        if consumed is None:
+            return {}
+
+        consumed_value = cls._format_hour_value(consumed)
+        updates: Dict[str, str] = {}
+        candidate_keys = [key for key in form_data.keys() if 'consumed' in key.lower()]
+
+        if 'consumed' in form_data:
+            updates['consumed'] = consumed_value
+
+        for key in candidate_keys:
+            updates[key] = consumed_value
+
+        if not updates:
+            updates['consumed'] = consumed_value
+
+        return updates
 
     def create_task_from_story(self, story_id: int, task_type: str, task_name: str,
                            assigned_to: str, estimate: int = 1, priority: int = 3,
@@ -868,6 +1096,176 @@ class ZendaoTool:
         response = self.session.post(url, headers=headers, data=post_data)
 
         return response.status_code == 200
+
+    def finish_task(self, task_id: int, consumed: Optional[float] = None, left: float = 0,
+                    comment: str = "") -> bool:
+        """
+        完成禅道任务（不是关闭）
+
+        Args:
+            task_id: 任务ID
+            consumed: 本次填写的消耗工时；传 None 时不提交该字段
+            left: 剩余工时，完成任务时通常为0
+            comment: 完成备注
+        """
+        self._ensure_logged_in()
+        before_detail = self.get_task_detail(task_id)
+
+        url = f"{self.base_url}task-finish-{task_id}.html?onlybody=yes"
+        response = self.session.get(url)
+
+        if response.status_code != 200:
+            raise RuntimeError(f'获取完成任务页面失败，状态码: {response.status_code}')
+
+        post_data = self._extract_form_data(response.text)
+        uid_match = re.search(r"var kuid = '([a-f0-9]+)';", response.text)
+        if not uid_match:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            uid_input = soup.find('input', {'id': 'uid', 'name': 'uid'})
+            if uid_input:
+                uid = uid_input.get('value')
+            else:
+                raise ValueError(f"无法提取uid参数，任务ID: {task_id}")
+        else:
+            uid = uid_match.group(1)
+
+        post_data['left'] = self._format_hour_value(left)
+        post_data['comment'] = comment
+        post_data['uid'] = uid
+        post_data.update(self._build_finish_consumed_updates(post_data, consumed))
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': url,
+            'Origin': self.base_url.rstrip('/'),
+            'Connection': 'keep-alive'
+        }
+
+        response = self.session.post(url, headers=headers, data=post_data)
+        if response.status_code != 200:
+            raise RuntimeError(f"完成任务请求失败，状态码: {response.status_code}")
+
+        after_detail = self.get_task_detail(task_id)
+        if self._is_finished_task_detail(after_detail):
+            return True
+
+        before_consumed = self._parse_float_value(before_detail.get("consumed"))
+        after_consumed = self._parse_float_value(after_detail.get("consumed"))
+        after_left = self._parse_float_value(after_detail.get("left"))
+
+        if consumed is not None and after_consumed >= before_consumed + consumed and after_left == float(left):
+            return True
+
+        if consumed is None and after_left == float(left):
+            return True
+
+        field_names = self._extract_form_field_names(response.text)
+        consumed_fields = [name for name in field_names if 'consumed' in name.lower()]
+        debug_parts = []
+        if consumed_fields:
+            debug_parts.append(f"页面工时字段: {', '.join(consumed_fields)}")
+        elif field_names:
+            debug_parts.append(f"页面字段: {', '.join(field_names[:20])}")
+        debug_suffix = f"；{'；'.join(debug_parts)}" if debug_parts else ""
+        raise RuntimeError(f"{self._extract_submit_error(response.text)}{debug_suffix}")
+
+    def auto_finish_tasks_by_date(self, start_date: str, end_date: Optional[str] = None,
+                                  date_field: str = "range",
+                                  statuses: Optional[Iterable[str]] = None,
+                                  comment: str = "按预估工时自动完成任务",
+                                  dry_run: bool = True) -> Dict[str, Any]:
+        """
+        按日期筛选任务，并按预估工时自动补录后完成任务
+
+        规则：
+        1. 仅处理未关闭任务
+        2. 仅处理状态在 statuses 中的任务，默认 wait / doing / pause
+        3. 本次填写工时 = max(预估工时 - 已消耗工时, 0)
+        4. 完成任务时剩余工时置为 0
+        """
+        self._ensure_logged_in()
+
+        statuses = tuple(statuses or ("wait", "doing", "pause"))
+        tasks_data = self.get_my_tasks()
+        task_list = self._normalize_task_list(tasks_data.get('tasks', []))
+        matched_tasks = self.filter_tasks_by_date(
+            task_list,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field,
+            statuses=statuses,
+            exclude_closed=True
+        )
+
+        results = []
+        success_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        for task in matched_tasks:
+            task_id = task.get('id')
+            estimate = self._parse_float_value(task.get('estimate'))
+            current_consumed = self._parse_float_value(task.get('consumed'))
+            finish_consumed = self.calculate_finish_consumed(task)
+
+            if estimate <= 0:
+                results.append({
+                    'task_id': task_id,
+                    'task_name': task.get('name'),
+                    'status': 'skipped',
+                    'reason': '预估工时为空或小于等于0，无法按预估工时自动完成'
+                })
+                skipped_count += 1
+                continue
+
+            result_item = {
+                'task_id': task_id,
+                'task_name': task.get('name'),
+                'matched_by': date_field,
+                'estimate': estimate,
+                'current_consumed': current_consumed,
+                'finish_consumed': finish_consumed,
+                'left': 0
+            }
+
+            if dry_run:
+                result_item['status'] = 'planned'
+                results.append(result_item)
+                continue
+
+            try:
+                success = self.finish_task(
+                    task_id=task_id,
+                    consumed=finish_consumed if finish_consumed > 0 else None,
+                    left=0,
+                    comment=comment
+                )
+                result_item['status'] = 'success' if success else 'failed'
+                results.append(result_item)
+                if success:
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                result_item['status'] = 'failed'
+                result_item['reason'] = str(e)
+                results.append(result_item)
+                failed_count += 1
+
+        return {
+            'start_date': start_date,
+            'end_date': end_date or start_date,
+            'date_field': date_field,
+            'dry_run': dry_run,
+            'matched_count': len(matched_tasks),
+            'success_count': success_count,
+            'skipped_count': skipped_count,
+            'failed_count': failed_count,
+            'results': results
+        }
 
     def get_task_types(self, project_id: int = None, story_id: int = None, module_id: int = None) -> Dict[str, str]:
         """
