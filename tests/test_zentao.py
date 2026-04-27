@@ -7,9 +7,6 @@ import pathlib
 import sys
 
 import pytest
-from zentao_ai_agent import ZendaoTool
-from zentao_ai_agent.zentao import task_type_dict
-from zentao_ai_agent.zentao.zendao_tool import strip_html_tags
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -17,25 +14,50 @@ SKILL_SCRIPTS_DIR = ROOT / "skills" / "zentao-task-planner" / "scripts"
 if str(SKILL_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SKILL_SCRIPTS_DIR))
 
+ZENTAO_COMMON_SPEC = importlib.util.spec_from_file_location(
+    "zentao_common",
+    SKILL_SCRIPTS_DIR / "zentao_common.py",
+)
+zentao_common = importlib.util.module_from_spec(ZENTAO_COMMON_SPEC)
+assert ZENTAO_COMMON_SPEC.loader is not None
+sys.modules[ZENTAO_COMMON_SPEC.name] = zentao_common
+ZENTAO_COMMON_SPEC.loader.exec_module(zentao_common)
+
 LIST_TASKS_SPEC = importlib.util.spec_from_file_location(
     "skill_list_tasks",
     SKILL_SCRIPTS_DIR / "list_tasks.py",
 )
 skill_list_tasks = importlib.util.module_from_spec(LIST_TASKS_SPEC)
 assert LIST_TASKS_SPEC.loader is not None
+sys.modules[LIST_TASKS_SPEC.name] = skill_list_tasks
 LIST_TASKS_SPEC.loader.exec_module(skill_list_tasks)
+
+ZentaoClient = zentao_common.ZentaoClient
+ZentaoConfig = zentao_common.ZentaoConfig
+TASK_TYPE_DICT = zentao_common.TASK_TYPE_DICT
+strip_html_tags = zentao_common.strip_html_tags
+
+
+def make_client(base_url: str = "https://example.com/zentao/") -> ZentaoClient:
+    return ZentaoClient(
+        ZentaoConfig(
+            base_url=base_url,
+            account="tester",
+            password="secret",
+        )
+    )
 
 
 def test_task_type_dict():
     """测试任务类型字典"""
-    assert "后端编码" in task_type_dict
-    assert "前端编码" in task_type_dict
-    assert task_type_dict["后端编码"] == "backendCoding"
+    assert "后端编码" in TASK_TYPE_DICT
+    assert "前端编码" in TASK_TYPE_DICT
+    assert TASK_TYPE_DICT["后端编码"] == "backendCoding"
 
 
 def test_zentao_tool_init():
     """测试禅道工具初始化"""
-    zendao = ZendaoTool()
+    zendao = make_client()
     assert zendao.base_url is not None
     assert zendao.session is not None
     assert not zendao.is_logged_in
@@ -64,7 +86,7 @@ def test_extract_form_data():
     </form>
     """
 
-    data = ZendaoTool._extract_form_data(html)
+    data = ZentaoClient._extract_form_data(html)
     assert data["uid"] == "abc123"
     assert data["consumed"] == "1"
     assert data["comment"] == "默认备注"
@@ -80,7 +102,7 @@ def test_extract_form_field_names():
     </form>
     """
 
-    field_names = ZendaoTool._extract_form_field_names(html)
+    field_names = ZentaoClient._extract_form_field_names(html)
     assert field_names == ["uid", "hoursConsumed", "comment"]
 
 
@@ -91,7 +113,7 @@ def test_build_finish_consumed_updates_uses_dynamic_consumed_keys():
         "workConsumed": "",
     }
 
-    updates = ZendaoTool._build_finish_consumed_updates(form_data, 4)
+    updates = ZentaoClient._build_finish_consumed_updates(form_data, 4)
     assert updates["hoursConsumed"] == "4"
     assert updates["workConsumed"] == "4"
 
@@ -124,7 +146,7 @@ def test_filter_tasks_by_date_range():
         },
     ]
 
-    matched = ZendaoTool.filter_tasks_by_date(
+    matched = ZentaoClient.filter_tasks_by_date(
         tasks,
         start_date="2026-04-07",
         end_date="2026-04-13",
@@ -137,12 +159,12 @@ def test_filter_tasks_by_date_range():
 
 def test_calculate_finish_consumed_uses_estimate_gap():
     task = {"estimate": "8", "consumed": "3.5"}
-    assert ZendaoTool.calculate_finish_consumed(task) == 4.5
+    assert ZentaoClient.calculate_finish_consumed(task) == 4.5
 
 
 def test_is_task_closed_accepts_closed_status_without_closed_date():
     task = {"status": "closed", "closedDate": "0000-00-00 00:00:00"}
-    assert ZendaoTool.is_task_closed(task) is True
+    assert ZentaoClient.is_task_closed(task) is True
 
 
 def test_list_tasks_parser_supports_view_only():
@@ -183,7 +205,7 @@ def test_select_tasks_returns_all_tasks_in_selected_view():
 
 
 def test_get_my_tasks_supports_view_endpoints():
-    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
     zendao.session_id = "fake-session"
 
@@ -208,7 +230,7 @@ def test_get_my_tasks_supports_view_endpoints():
 
 
 def test_auto_finish_tasks_by_date_dry_run():
-    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
     zendao.session_id = "fake-session"
 
@@ -251,7 +273,7 @@ def test_auto_finish_tasks_by_date_dry_run():
 
 
 def test_finish_task_omits_consumed_when_none():
-    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
     zendao.session_id = "fake-session"
 
@@ -284,7 +306,7 @@ def test_finish_task_omits_consumed_when_none():
 
 
 def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
-    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
     zendao.session_id = "fake-session"
 
@@ -327,7 +349,7 @@ def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
 
 
 def test_finish_task_raises_error_when_post_200_but_task_not_updated():
-    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
     zendao.session_id = "fake-session"
 
