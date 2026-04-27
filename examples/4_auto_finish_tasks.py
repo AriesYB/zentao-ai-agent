@@ -87,7 +87,7 @@ def main():
     preview_and_confirm_finish(
         zendao=zendao,
         start_date="2026-04-13",
-        end_date="2026-04-20",
+        end_date="2026-04-27",
         date_field="range"
     )
 

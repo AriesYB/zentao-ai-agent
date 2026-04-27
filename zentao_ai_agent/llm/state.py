@@ -15,7 +15,7 @@ def _replace_messages(_old: List[BaseMessage], new: List[BaseMessage]) -> List[B
 
 
 # 定义简化的智能体状态
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     # =========message级变量==========
     # 当前用户输入
     cur_user_input: str
@@ -28,6 +28,8 @@ class AgentState(TypedDict):
     history: List[BaseMessage]
     # 退出标志
     should_exit: bool
+    # 是否确认当前结果
+    confirmed: bool
     # 任务规划结果
     task_plan: str
     # 任务参数

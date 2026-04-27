@@ -154,7 +154,7 @@ class ZentaoTaskPlanAgent:
     """
 
     def __init__(self):
-        self.llm = init_llm()
+        self.llm = init_llm(streaming=True)
         self.llm.callbacks=[StreamingStdOutCallbackHandler()]
         self.tool_integration = LLMToolIntegration(
             [

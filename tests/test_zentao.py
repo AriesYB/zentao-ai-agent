@@ -2,10 +2,28 @@
 禅道工具测试
 """
 
+import importlib.util
+import pathlib
+import sys
+
 import pytest
 from zentao_ai_agent import ZendaoTool
 from zentao_ai_agent.zentao import task_type_dict
 from zentao_ai_agent.zentao.zendao_tool import strip_html_tags
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SKILL_SCRIPTS_DIR = ROOT / "skills" / "zentao-task-planner" / "scripts"
+if str(SKILL_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SKILL_SCRIPTS_DIR))
+
+LIST_TASKS_SPEC = importlib.util.spec_from_file_location(
+    "skill_list_tasks",
+    SKILL_SCRIPTS_DIR / "list_tasks.py",
+)
+skill_list_tasks = importlib.util.module_from_spec(LIST_TASKS_SPEC)
+assert LIST_TASKS_SPEC.loader is not None
+LIST_TASKS_SPEC.loader.exec_module(skill_list_tasks)
 
 
 def test_task_type_dict():
@@ -120,6 +138,73 @@ def test_filter_tasks_by_date_range():
 def test_calculate_finish_consumed_uses_estimate_gap():
     task = {"estimate": "8", "consumed": "3.5"}
     assert ZendaoTool.calculate_finish_consumed(task) == 4.5
+
+
+def test_is_task_closed_accepts_closed_status_without_closed_date():
+    task = {"status": "closed", "closedDate": "0000-00-00 00:00:00"}
+    assert ZendaoTool.is_task_closed(task) is True
+
+
+def test_list_tasks_parser_supports_view_only():
+    parser = skill_list_tasks.build_parser()
+    args = parser.parse_args(["--view", "finishedBy", "--summary-only"])
+    assert args.view == "finishedBy"
+    assert args.summary_only is True
+
+
+def test_select_tasks_returns_all_tasks_in_selected_view():
+    tasks = [
+        {
+            "id": 1,
+            "name": "待处理任务",
+            "status": "wait",
+            "closedDate": "0000-00-00 00:00:00",
+        },
+        {
+            "id": 2,
+            "name": "已关闭任务",
+            "status": "closed",
+            "closedDate": "0000-00-00 00:00:00",
+        },
+        {
+            "id": 3,
+            "name": "进行中任务",
+            "status": "doing",
+            "closedDate": "",
+        },
+    ]
+
+    filtered = skill_list_tasks.select_tasks(
+        tasks,
+        summary_only=True,
+    )
+    assert [task["id"] for task in filtered] == [1, 2, 3]
+    assert filtered[1]["closed"] is True
+
+
+def test_get_my_tasks_supports_view_endpoints():
+    zendao = ZendaoTool(base_url="https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"status": "success", "data": "{\"tasks\": []}"}
+
+    def fake_post(url):
+        captured["url"] = url
+        return FakeResponse()
+
+    zendao.session.post = fake_post
+    result = zendao.get_my_tasks(view="assignedTo")
+
+    assert result == {"tasks": []}
+    assert captured["url"] == "https://example.com/zentao/my-task-assignedTo.json"
 
 
 def test_auto_finish_tasks_by_date_dry_run():

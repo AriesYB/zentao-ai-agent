@@ -291,7 +291,7 @@ class ZendaoTool:
         data = self._parse_response_data(response)
         return data.get('users', {})
 
-    def get_my_tasks(self) -> Dict[str, Any]:
+    def get_my_tasks(self, view: str = "active") -> Dict[str, Any]:
         """
         获取我的任务列表
 
@@ -300,7 +300,16 @@ class ZendaoTool:
         """
         self._ensure_logged_in()
 
-        url = f"{self.base_url}my-task.json"
+        endpoint_map = {
+            "active": "my-task.json",
+            "assignedTo": "my-task-assignedTo.json",
+            "finishedBy": "my-task-finishedBy.json",
+            "closedBy": "my-task-closedBy.json",
+        }
+        if view not in endpoint_map:
+            raise ValueError(f"不支持的任务视图: {view}")
+
+        url = f"{self.base_url}{endpoint_map[view]}"
 
         response = self.session.post(url)
         return self._parse_response_data(response)
@@ -348,6 +357,16 @@ class ZendaoTool:
             return default
 
     @classmethod
+    def is_task_closed(cls, task: Dict[str, Any]) -> bool:
+        """
+        统一判断任务是否处于关闭态
+        """
+        status = str(task.get("status", "")).strip().lower()
+        if status == "closed":
+            return True
+        return cls._parse_date_value(task.get("closedDate")) is not None
+
+    @classmethod
     def filter_tasks_by_date(cls, tasks: Any, start_date: str, end_date: Optional[str] = None,
                              date_field: str = "range", statuses: Optional[Iterable[str]] = None,
                              exclude_closed: bool = True) -> List[Dict[str, Any]]:
@@ -377,7 +396,7 @@ class ZendaoTool:
             if allowed_statuses and status not in allowed_statuses:
                 continue
 
-            if exclude_closed and cls._parse_date_value(task.get("closedDate")) is not None:
+            if exclude_closed and cls.is_task_closed(task):
                 continue
 
             est_started = cls._parse_date_value(task.get("estStarted"))
@@ -916,6 +935,8 @@ class ZendaoTool:
 
             # 按制表符分割
             parts = line.split('\t')
+            if parts[:3] == ["人员姓名", "需求编号", "任务名称（功能点）"]:
+                continue
             if len(parts) < 7:
                 validation_errors.append(f'第{line_num}行: 数据格式错误，需要7列数据')
                 continue

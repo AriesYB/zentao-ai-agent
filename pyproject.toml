@@ -45,6 +45,9 @@ dev = [
     "black>=24.0.0",
 ]
 
+[project.scripts]
+zentao-agent = "zentao_ai_agent.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/AriesYB/zentao-ai-agent"
 Repository = "https://github.com/AriesYB/zentao-ai-agent"
@@ -54,8 +57,8 @@ Issues = "https://github.com/AriesYB/zentao-ai-agent/issues"
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["zentao_ai_agent"]
+[tool.setuptools.packages.find]
+include = ["zentao_ai_agent*"]
 
 [tool.black]
 line-length = 100
