@@ -32,6 +32,15 @@ assert LIST_TASKS_SPEC.loader is not None
 sys.modules[LIST_TASKS_SPEC.name] = skill_list_tasks
 LIST_TASKS_SPEC.loader.exec_module(skill_list_tasks)
 
+REPAIR_TASK_FINISH_DATE_SPEC = importlib.util.spec_from_file_location(
+    "skill_repair_task_finish_date",
+    SKILL_SCRIPTS_DIR / "repair_task_finish_date.py",
+)
+skill_repair_task_finish_date = importlib.util.module_from_spec(REPAIR_TASK_FINISH_DATE_SPEC)
+assert REPAIR_TASK_FINISH_DATE_SPEC.loader is not None
+sys.modules[REPAIR_TASK_FINISH_DATE_SPEC.name] = skill_repair_task_finish_date
+REPAIR_TASK_FINISH_DATE_SPEC.loader.exec_module(skill_repair_task_finish_date)
+
 ZentaoClient = zentao_common.ZentaoClient
 ZentaoConfig = zentao_common.ZentaoConfig
 TASK_TYPE_DICT = zentao_common.TASK_TYPE_DICT
@@ -133,6 +142,57 @@ def test_build_finish_date_updates_uses_finish_form_date_keys():
     }
 
 
+def test_build_effort_date_updates_falls_back_to_date_field():
+    updates = ZentaoClient._build_effort_date_updates({"uid": "abc123"}, "2026-04-13")
+    assert updates == {"date": "2026-04-13"}
+
+
+def test_normalize_task_efforts_accepts_dict_and_filters_missing_id():
+    efforts = ZentaoClient._normalize_task_efforts(
+        {
+            "efforts": {
+                "1": {"id": "1", "date": "2026-04-12"},
+                "missing": {"date": "2026-04-13"},
+            }
+        }
+    )
+    assert efforts == [{"id": "1", "date": "2026-04-12"}]
+
+
+def test_extract_record_estimates_from_record_estimate_table():
+    html = """
+    <table>
+        <tbody>
+            <tr>
+                <td>1</td>
+                <td><input name="dates[1]" value="2026-04-13"></td>
+                <td><input name="consumed[1]" value=""></td>
+                <td><input name="left[1]" value=""></td>
+            </tr>
+            <tr>
+                <td>452548</td>
+                <td>2026-04-13</td>
+                <td>4</td>
+                <td>0</td>
+                <td title="">完成</td>
+                <td></td>
+            </tr>
+        </tbody>
+    </table>
+    """
+
+    estimates = ZentaoClient._extract_record_estimates(html)
+    assert estimates == [
+        {
+            "id": "452548",
+            "date": "2026-04-13",
+            "consumed": "4",
+            "left": "0",
+            "work": "完成",
+        }
+    ]
+
+
 def test_filter_tasks_by_date_range():
     tasks = [
         {
@@ -187,6 +247,15 @@ def test_list_tasks_parser_supports_view_only():
     args = parser.parse_args(["--view", "finishedBy", "--summary-only"])
     assert args.view == "finishedBy"
     assert args.summary_only is True
+
+
+def test_repair_task_finish_date_parser_defaults_to_preview():
+    parser = skill_repair_task_finish_date.build_parser()
+    args = parser.parse_args(["--task-id", "220603", "--assigned-to", "yangbiao"])
+    assert args.task_id == 220603
+    assert args.assigned_to == "yangbiao"
+    assert args.left == 1
+    assert args.execute is False
 
 
 def test_select_tasks_returns_all_tasks_in_selected_view():
@@ -427,6 +496,130 @@ def test_finish_task_raises_error_when_post_200_but_task_not_updated():
 
     with pytest.raises(RuntimeError, match="validation error"):
         zendao.finish_task(task_id=301, consumed=4, left=0, comment="完成")
+
+
+def test_activate_task_posts_assigned_to_left_and_uid():
+    zendao = make_client("https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    captured = {}
+
+    def fake_get(url):
+        captured["get_url"] = url
+        return FakeResponse(text="<input id='uid' name='uid' value='uid-123'>")
+
+    def fake_post(url, headers=None, data=None):
+        captured["post_url"] = url
+        captured["data"] = data
+        return FakeResponse(status_code=200)
+
+    details = iter([
+        {"id": 401, "status": "done", "assignedTo": "yangbiao", "left": "0"},
+        {"id": 401, "status": "doing", "assignedTo": "yangbiao", "left": "1"},
+    ])
+
+    zendao.session.get = fake_get
+    zendao.session.post = fake_post
+    zendao.get_task_detail = lambda task_id: next(details)
+
+    assert zendao.activate_task(task_id=401, comment="修复") is True
+    assert captured["get_url"] == "https://example.com/zentao/task-activate-401.html?onlybody=yes"
+    assert captured["post_url"] == "https://example.com/zentao/task-activate-401.html?onlybody=yes"
+    assert captured["data"]["assignedTo"] == "yangbiao"
+    assert captured["data"]["left"] == "1"
+    assert captured["data"]["comment"] == "修复"
+    assert captured["data"]["uid"] == "uid-123"
+
+
+def test_edit_effort_date_posts_date_fields_from_form():
+    zendao = make_client("https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    captured = {}
+
+    def fake_get(url):
+        captured["get_url"] = url
+        return FakeResponse(text="""
+        <form>
+            <input id='uid' name='uid' value='uid-123'>
+            <input name='date' value='2026-04-15'>
+            <input name='consumed' value='8'>
+            <input name='left' value='0'>
+            <textarea name='work'>完成</textarea>
+        </form>
+        """)
+
+    def fake_post(url, headers=None, data=None):
+        captured["post_url"] = url
+        captured["data"] = data
+        return FakeResponse(status_code=200)
+
+    zendao.session.get = fake_get
+    zendao.session.post = fake_post
+
+    assert zendao.edit_effort_date(effort_id=9001, effort_date="2026-04-13") is True
+    assert captured["get_url"] == "https://example.com/zentao/task-editEstimate-9001.html?onlybody=yes"
+    assert captured["post_url"] == "https://example.com/zentao/task-editEstimate-9001.html?onlybody=yes"
+    assert captured["data"]["date"] == "2026-04-13"
+    assert captured["data"]["consumed"] == "8"
+    assert captured["data"]["left"] == "0"
+    assert captured["data"]["work"] == "完成"
+    assert captured["data"]["uid"] == "uid-123"
+
+
+def test_repair_task_wrong_finish_date_uses_existing_efforts_before_activate():
+    zendao = make_client("https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    calls = []
+    zendao.get_task_detail = lambda task_id: {
+        "id": 501,
+        "name": "完成日期错误的任务",
+        "deadline": "2026-04-13",
+    }
+    zendao.get_task_efforts = lambda task_id: [
+        {"id": "11", "date": "2026-04-15"},
+        {"id": "12", "date": "2026-04-15"},
+    ]
+
+    def fake_activate_task(task_id, assigned_to=None, left=1, comment=""):
+        calls.append(("activate", task_id, assigned_to, left, comment))
+        return True
+
+    def fake_edit_effort_date(effort_id, effort_date):
+        calls.append(("edit", effort_id, effort_date))
+        return True
+
+    zendao.activate_task = fake_activate_task
+    zendao.edit_effort_date = fake_edit_effort_date
+
+    result = zendao.repair_task_wrong_finish_date(
+        task_id=501,
+        assigned_to="yangbiao",
+        dry_run=False,
+    )
+
+    assert result["status"] == "success"
+    assert result["deadline"] == "2026-04-13"
+    assert result["effort_ids"] == [11, 12]
+    assert calls == [
+        ("activate", 501, "yangbiao", 1, "修复任务完成日期"),
+        ("edit", 11, "2026-04-13"),
+        ("edit", 12, "2026-04-13"),
+    ]
 
 
 if __name__ == "__main__":
