@@ -118,6 +118,21 @@ def test_build_finish_consumed_updates_uses_dynamic_consumed_keys():
     assert updates["workConsumed"] == "4"
 
 
+def test_build_finish_date_updates_uses_finish_form_date_keys():
+    form_data = {
+        "uid": "abc123",
+        "finishedDate": "2026-04-15",
+        "realDate": "2026-04-15",
+        "noticeDate": "2026-04-15",
+    }
+
+    updates = ZentaoClient._build_finish_date_updates(form_data, "2026-04-13")
+    assert updates == {
+        "finishedDate": "2026-04-13",
+        "realDate": "2026-04-13",
+    }
+
+
 def test_filter_tasks_by_date_range():
     tasks = [
         {
@@ -305,6 +320,48 @@ def test_finish_task_omits_consumed_when_none():
     assert captured["data"]["comment"] == "完成"
 
 
+def test_finish_task_posts_finish_date_when_form_has_supported_date_field():
+    zendao = make_client("https://example.com/zentao/")
+    zendao.is_logged_in = True
+    zendao.session_id = "fake-session"
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    captured = {}
+
+    def fake_get(url):
+        return FakeResponse(text="""
+        <form>
+            <input id='uid' name='uid' value='uid-123'>
+            <input name='finishedDate' value='2026-04-15'>
+        </form>
+        """)
+
+    def fake_post(url, headers=None, data=None):
+        captured["data"] = data
+        return FakeResponse(status_code=200)
+
+    zendao.session.get = fake_get
+    zendao.session.post = fake_post
+    details = iter([
+        {"id": 101, "status": "doing", "consumed": "4", "left": "1"},
+        {"id": 101, "status": "done", "consumed": "8", "left": "0"},
+    ])
+    zendao.get_task_detail = lambda task_id: next(details)
+
+    assert zendao.finish_task(
+        task_id=101,
+        consumed=4,
+        left=0,
+        comment="完成",
+        finish_date="2026-04-13",
+    ) is True
+    assert captured["data"]["finishedDate"] == "2026-04-13"
+
+
 def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
     zendao = make_client("https://example.com/zentao/")
     zendao.is_logged_in = True
@@ -327,11 +384,12 @@ def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
 
     captured = {}
 
-    def fake_finish_task(task_id, consumed=None, left=0, comment=""):
+    def fake_finish_task(task_id, consumed=None, left=0, comment="", finish_date=None):
         captured["task_id"] = task_id
         captured["consumed"] = consumed
         captured["left"] = left
         captured["comment"] = comment
+        captured["finish_date"] = finish_date
         return True
 
     zendao.finish_task = fake_finish_task
@@ -346,6 +404,7 @@ def test_auto_finish_tasks_by_date_omits_consumed_when_gap_is_zero():
     assert captured["task_id"] == 201
     assert captured["consumed"] is None
     assert captured["left"] == 0
+    assert captured["finish_date"] == "2026-04-13"
 
 
 def test_finish_task_raises_error_when_post_200_but_task_not_updated():

@@ -586,6 +586,37 @@ class ZentaoClient:
             updates["consumed"] = consumed_value
         return updates
 
+    @classmethod
+    def _build_finish_date_updates(
+        cls,
+        form_data: Dict[str, str],
+        finish_date: Optional[str],
+    ) -> Dict[str, str]:
+        if not finish_date:
+            return {}
+
+        parsed_finish_date = cls._parse_date_value(finish_date)
+        if not parsed_finish_date:
+            raise ValueError(f"实际完成日期格式错误: {finish_date}")
+
+        date_value = parsed_finish_date.strftime("%Y-%m-%d")
+        exact_candidate_keys = (
+            "finishedDate",
+            "realDate",
+            "date",
+            "date[]",
+            "consumedDate",
+            "consumedDate[]",
+            "dates[]",
+            "workDate",
+            "workDate[]",
+        )
+        updates: Dict[str, str] = {}
+        for key in exact_candidate_keys:
+            if key in form_data:
+                updates[key] = date_value
+        return updates
+
     def create_task_from_story(
         self,
         story_id: int,
@@ -746,6 +777,7 @@ class ZentaoClient:
         consumed: Optional[float] = None,
         left: float = 0,
         comment: str = "",
+        finish_date: Optional[str] = None,
     ) -> bool:
         self.ensure_logged_in()
         before_detail = self.get_task_detail(task_id)
@@ -770,6 +802,7 @@ class ZentaoClient:
         post_data["comment"] = comment
         post_data["uid"] = uid
         post_data.update(self._build_finish_consumed_updates(post_data, consumed))
+        post_data.update(self._build_finish_date_updates(post_data, finish_date))
 
         submit = self.session.post(
             url,
@@ -944,6 +977,7 @@ class ZentaoClient:
                 "task_id": task_id,
                 "task_name": task.get("name"),
                 "matched_by": date_field,
+                "finish_date": task.get("deadline"),
                 "estimate": estimate,
                 "current_consumed": current_consumed,
                 "finish_consumed": finish_consumed,
@@ -961,6 +995,7 @@ class ZentaoClient:
                     consumed=finish_consumed if finish_consumed > 0 else None,
                     left=0,
                     comment=comment,
+                    finish_date=task.get("deadline"),
                 )
                 result_item["status"] = "success" if success else "failed"
                 results.append(result_item)
